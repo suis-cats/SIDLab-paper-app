@@ -96,6 +96,10 @@ export async function createUser(name: string) {
         name,
         totalPages: 0,
         updatedAt: serverTimestamp(),
+        currentStreak: 0,
+        logCount: 0,
+        lastLogDate: serverTimestamp(),
+        badges: [],
     });
     return newUserRef.id;
 }
@@ -122,11 +126,49 @@ export async function addReadingLog(userId: string, userName: string, currentTot
         createdAt: serverTimestamp(),
     });
 
-    // 2. Update User Total (Set directly, no increment)
+    // 2. Calculate Streak
     const userRef = doc(db, USERS_COLLECTION, userId);
-    await updateDoc(userRef, {
-        totalPages: currentTotalPages,
-        updatedAt: serverTimestamp(),
+    await runTransaction(db, async (transaction) => {
+        const userDoc = await transaction.get(userRef);
+        if (!userDoc.exists()) {
+            throw new Error("User not found!");
+        }
+        
+        const userData = userDoc.data();
+        let currentStreak = userData.currentStreak || 0;
+        const lastLogDate = (userData.lastLogDate as Timestamp)?.toDate();
+        
+        const now = new Date();
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        
+        let newLogDate = now;
+
+        if (lastLogDate) {
+            const lastLog = new Date(lastLogDate.getFullYear(), lastLogDate.getMonth(), lastLogDate.getDate());
+            const diffTime = Math.abs(today.getTime() - lastLog.getTime());
+            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+            if (diffDays === 1) {
+                // Consecutive day
+                currentStreak += 1;
+            } else if (diffDays > 1) {
+                // Streak broken
+                currentStreak = 1;
+            }
+            // If diffDays === 0 (same day), do nothing to streak
+            if (currentStreak === 0) currentStreak = 1; // First ever log
+        } else {
+            currentStreak = 1;
+        }
+
+
+        transaction.update(userRef, {
+            totalPages: currentTotalPages,
+            currentStreak: currentStreak,
+            logCount: increment(1),
+            lastLogDate: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+        });
     });
 }
 
@@ -155,6 +197,10 @@ export async function getRanking() {
             id: doc.id,
             name: data.name,
             totalPages: data.totalPages,
+            currentStreak: data.currentStreak || 0,
+            logCount: data.logCount || 0,
+            lastLogDate: (data.lastLogDate as Timestamp)?.toDate() || new Date(),
+            badges: data.badges || [],
             updatedAt: (data.updatedAt as Timestamp)?.toDate() || new Date(),
         } as User;
     });
